@@ -21,3 +21,4 @@ fi
 
 echo "Setup completed successfully!"
 
+#sudo apt install espeak espeak-data
