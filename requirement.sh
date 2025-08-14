@@ -19,6 +19,8 @@ else
     echo "Model fotiecodes/jarvis:3b is already present."
 fi
 
+#check les pip
+pip install --break-system-packages PyQt5 PyOpenGL numpy requests ollama
 echo "Setup completed successfully!"
 
 #sudo apt install espeak espeak-data

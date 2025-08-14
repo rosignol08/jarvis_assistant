@@ -3,8 +3,7 @@ setlocal enabledelayedexpansion
 
 :: Installer les dépendances Python
 echo Installing Python dependencies...
-pip install PyQt5 PyOpenGL
-
+pip install PyQt5 PyOpenGL numpy requests ollama
 :: Vérification que le binaire d'Ollama fonctionne
 where ollama >nul 2>&1
 if %ERRORLEVEL% equ 0 (
@@ -12,15 +11,16 @@ if %ERRORLEVEL% equ 0 (
     if %ERRORLEVEL% equ 0 (
         echo Ollama is already installed and working. Skipping installation.
     ) else (
-        goto :install_ollama
+        echo install ollama depuis ce lien https://ollama.com/download/windows
+        ::goto :install_ollama
     )
 ) else (
-    :install_ollama
-    echo Installing Ollama...
-    powershell -Command "Invoke-WebRequest -Uri 'https://ollama.com/download/ollama-windows-amd64.zip' -OutFile '%TEMP%\ollama.zip'"
-    powershell -Command "Expand-Archive -Path '%TEMP%\ollama.zip' -DestinationPath '%USERPROFILE%\ollama' -Force"
-    setx PATH "%PATH%;%USERPROFILE%\ollama"
-    set "PATH=%PATH%;%USERPROFILE%\ollama"
+    ::install_ollama
+    ::echo Installing Ollama...
+    ::powershell -Command "Invoke-WebRequest -Uri 'https://ollama.com/download/ollama-windows-amd64.zip' -OutFile '%TEMP%\ollama.zip'"
+    ::powershell -Command "Expand-Archive -Path '%TEMP%\ollama.zip' -DestinationPath '%USERPROFILE%\ollama' -Force"
+    ::setx PATH "%PATH%;%USERPROFILE%\ollama"
+    ::set "PATH=%PATH%;%USERPROFILE%\ollama"
 )
 
 :: Télécharger le modèle si pas déjà présent
