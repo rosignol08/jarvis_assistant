@@ -1,4 +1,4 @@
-from PyQt5.QtWidgets import QMainWindow, QApplication, QOpenGLWidget, QVBoxLayout, QWidget, QTextEdit, QLineEdit, QPushButton
+from PyQt5.QtWidgets import QMainWindow, QApplication, QOpenGLWidget, QVBoxLayout, QWidget, QTextEdit, QLineEdit, QPushButton, QComboBox
 from PyQt5.QtCore import QTimer, QThread, pyqtSignal
 from OpenGL.GL import *
 import sys
@@ -194,6 +194,9 @@ class MainWindow(QMainWindow):
         self.current_speech_thread = None
         self.selected_model = None  # Nouveau attribut pour le modèle sélectionné
         self.ollama_thread = None  # Nouveau attribut pour le thread Ollama
+        self.model_combo = QComboBox()
+        self.model_combo.currentIndexChanged.connect(self.on_model_changed)
+        self._model_init = True  # Pour différencier init/choix utilisateur
         
         self.setStyleSheet("""
             QMainWindow {
@@ -247,6 +250,7 @@ class MainWindow(QMainWindow):
         self.lineEdit.returnPressed.connect(self.send_message)
 
         layout = QVBoxLayout()
+        layout.addWidget(self.model_combo)
         layout.addWidget(self.glWidget, 3)
         layout.addWidget(self.textEdit, 2)
         layout.addWidget(self.lineEdit)
@@ -256,59 +260,57 @@ class MainWindow(QMainWindow):
         container.setLayout(layout)
         self.setCentralWidget(container)
         
-        # Tester la connexion Ollama au démarrage
+        # Tester la connexion Ollama au démarrage (une seule fois)
         QTimer.singleShot(1000, self.test_ollama_connection)
 
-        # Tester la connexion Ollama au démarrage
-        self.test_ollama_connection()
     def test_ollama_connection(self):
-        """Tester la connexion à Ollama, afficher les modèles et choisir automatiquement"""
+        """Tester la connexion à Ollama, afficher les modèles et remplir le menu déroulant"""
         try:
             test_response = requests.get("http://localhost:11434/api/tags", timeout=5)
             if test_response.status_code == 200:
                 models_data = test_response.json()
                 print("[Ollama] Modèles disponibles:", models_data)
-    
                 models = models_data.get('models', [])
-                model_name = None
-    
+                self.model_combo.clear()
+                found = False
                 for m in models:
-                    # Le nom du modèle est dans la clé "model" et pas "name"
-                    if isinstance(m, dict):
-                        if m.get('model') == "fotiecodes/jarvis:3b":
-                            model_name = m.get('model')
-                            break
-                        
-                if model_name:
-                    self.selected_model = model_name
+                    if isinstance(m, dict) and m.get('model'):
+                        self.model_combo.addItem(m['model'])
+                        if m['model'] == "fotiecodes/jarvis:3b":
+                            found = True
+                if found:
+                    self.selected_model = "fotiecodes/jarvis:3b"
+                    idx = self.model_combo.findText("fotiecodes/jarvis:3b")
+                    if idx >= 0:
+                        self._model_init = True  # On va changer l'index, donc c'est encore l'init
+                        self.model_combo.setCurrentIndex(idx)
+                elif self.model_combo.count() > 0:
+                    self.selected_model = self.model_combo.currentText()
                 else:
                     self.selected_model = None
-                    self.textEdit.append(
-                        "<b style='color: #ff0000;'>Erreur:</b> "
-                        "Le modèle 'fotiecodes/jarvis:3b' n'est pas disponible sur Ollama."
-                    )
-                    self.textEdit.append(
-                        "<b style='color: #ffaa00;'>Solution:</b> "
-                        "Téléchargez-le avec <code>ollama pull fotiecodes/jarvis:3b</code> dans un terminal."
-                    )
+                    self.textEdit.append("<b style='color: #ff0000;'>Erreur:</b> Aucun modèle Ollama n'est disponible.")
             else:
                 print(f"[Ollama] Répond mais avec le code {test_response.status_code}")
                 self.selected_model = None
-                self.textEdit.append(
-                    f"<b style='color: #ff6600;'>Attention:</b> "
-                    f"Ollama répond mais avec le code {test_response.status_code}"
-                )
-    
+                self.textEdit.append(f"<b style='color: #ff6600;'>Attention:</b> Ollama répond mais avec le code {test_response.status_code}")
         except Exception as e:
             print(f"[Ollama] Erreur de connexion: {e}")
             self.selected_model = None
-            self.textEdit.append(
-                f"<b style='color: #ff0000;'>Erreur:</b> Impossible de se connecter à Ollama: {e}"
-            )
-            self.textEdit.append(
-                "<b style='color: #ffaa00;'>Solution:</b> Lancez 'ollama serve' dans un terminal"
-            )
- 
+            self.textEdit.append(f"<b style='color: #ff0000;'>Erreur:</b> Impossible de se connecter à Ollama: {e}")
+            self.textEdit.append("<b style='color: #ffaa00;'>Solution:</b> Lancez 'ollama serve' dans un terminal")
+
+    def on_model_changed(self, idx):
+        if self.model_combo.count() > 0:
+            self.selected_model = self.model_combo.currentText()
+            # Afficher notification et chargement seulement si ce n'est pas l'init
+            if getattr(self, '_model_init', False):
+                self._model_init = False
+            else:
+                self.textEdit.append(f"<b style='color: #ffaa00;'>Modèle sélectionné :</b> {self.selected_model}")
+                self.show_loading_dots()
+                # Simuler un petit délai de chargement (sinon l'UI reste bloquée si le modèle n'est pas prêt)
+                QTimer.singleShot(1200, self.stop_loading_dots)
+
     def send_message(self):
         prompt = self.lineEdit.text()
         if not prompt.strip():
@@ -317,10 +319,24 @@ class MainWindow(QMainWindow):
         self.textEdit.append(f"<b style='color: #00d4ff;'>Vous :</b> {prompt}")
         self.lineEdit.clear()
 
-        # --- Appel à Jarvis ---
-        response = self.query_jarvis(prompt)
+        # Afficher les points de chargement
+        self.show_loading_dots()
+
+        # --- Appel à Jarvis en thread (asynchrone) ---
+        self.ollama_thread = OllamaThread(prompt, model=self.selected_model or "fotiecodes/jarvis:3b")
+        self.ollama_thread.response_received.connect(self.on_response_received)
+        self.ollama_thread.error_occurred.connect(self.on_error_occurred)
+        self.ollama_thread.start()
+
+    def on_response_received(self, response):
         self.textEdit.append(f"<b style='color: #00ff88;'>Jarvis :</b> {response}")
         self.speak(response)
+        self.stop_loading_dots()  # Arrêter l'animation de chargement
+
+    def on_error_occurred(self, error):
+        self.textEdit.append(f"<b style='color: #ff0000;'>Erreur :</b> {error}")
+        self.glWidget.setSpeaking(False)
+        self.stop_loading_dots()  # Arrêter l'animation de chargement
     
     def query_jarvis(self, prompt):
         """Appelle Ollama directement via l'API Python"""
@@ -332,17 +348,53 @@ class MainWindow(QMainWindow):
             return f"[Erreur Ollama Python: {e}]"
 
     def query_jarvis_async(self, prompt):
-        """Version non-bloquante pour PyQt"""
-        def run_chat():
+        """Lancer la requête Ollama via le package Python officiel en streaming"""
+        try:
+            from ollama import chat
+        except ImportError:
+            self.on_error_occurred("Le package 'ollama' n'est pas installé. Installez-le avec 'pip install ollama'.")
+            return
+        model = getattr(self, 'selected_model', None)
+        if not model:
+            self.on_error_occurred("Aucun modèle Ollama sélectionné. Vérifiez la connexion et le téléchargement du modèle.")
+            return
+        
+        def run_chat_stream():
             try:
-                messages = [{"role": "user", "content": prompt}]
-                response: ChatResponse = chat(model="fotiecodes/jarvis:3b", messages=messages)
-                self.on_response_received(response["message"]["content"])
+                messages = [
+                    {"role": "user", "content": prompt}
+                ]
+                # Affichage progressif
+                full_text = ""
+                self.textEdit.append(f"<b style='color: #00ff88;'>Jarvis :</b> <span id='streaming'></span>")
+                cursor = self.textEdit.textCursor()
+                cursor.movePosition(cursor.End)
+                self.textEdit.setTextCursor(cursor)
+                first_token = True
+                for chunk in chat(model=model, messages=messages, stream=True):
+                    # chunk.message.content contient le texte généré jusqu'ici
+                    new_text = chunk.message.content[len(full_text):]
+                    full_text = chunk.message.content
+                    if new_text:
+                        if first_token:
+                            self.stop_loading_dots()
+                            first_token = False
+                        cursor = self.textEdit.textCursor()
+                        cursor.movePosition(cursor.End)
+                        cursor.insertText(new_text)
+                        self.textEdit.setTextCursor(cursor)
+                        self.textEdit.ensureCursorVisible()
+                # Lancer la synthèse vocale à la fin
+                self.speak(full_text)
+                self.sendButton.setEnabled(True)
+                self.lineEdit.setEnabled(True)
+                self.lineEdit.setFocus()
             except Exception as e:
-                self.on_error_occurred(f"[Erreur Ollama Python: {e}]")
-
-        import threading
-        threading.Thread(target=run_chat, daemon=True).start()
+                self.on_error_occurred(f"Erreur Ollama Python (stream): {e}")
+        # Désactiver l'UI pendant la génération
+        self.sendButton.setEnabled(False)
+        self.lineEdit.setEnabled(False)
+        threading.Thread(target=run_chat_stream, daemon=True).start()
     def speak(self, text):
         """Nouvelle méthode TTS robuste"""
         if not text or not text.strip():
@@ -367,6 +419,36 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print(f"Erreur TTS: {e}")
             self.glWidget.setSpeaking(False)
+
+    def show_loading_dots(self):
+        """Affiche et anime les points de chargement dans la zone de texte et change le bouton en 'Chargement...'"""
+        #self.loading_dots_count = 0
+        #self.loading_dots_timer = QTimer()
+        #self.loading_dots_timer.timeout.connect(self.update_loading_dots)
+        #self.loading_dots_timer.start(400)
+        self.loading_dots_base = self.textEdit.toPlainText()
+        #self.textEdit.append("<b style='color: #00ff88;'>Jarvis :</b> <span id='dots'>.</span>")
+        self.sendButton.setText("Chargement...")
+
+    def update_loading_dots(self):
+        self.loading_dots_count = (self.loading_dots_count + 1) % 4
+        dots = '.' * self.loading_dots_count
+        # Remplacer la dernière ligne par les nouveaux points
+        text = self.textEdit.toPlainText().split('\n')
+        if text and text[-1].startswith('Jarvis'):
+            text[-1] = f"Jarvis : {dots}"
+            self.textEdit.setPlainText('\n'.join(text))
+            cursor = self.textEdit.textCursor()
+            cursor.movePosition(cursor.End)
+            self.textEdit.setTextCursor(cursor)
+
+    def stop_loading_dots(self):
+        if hasattr(self, 'loading_dots_timer'):
+            self.loading_dots_timer.stop()
+            del self.loading_dots_timer
+        self.sendButton.setText("Envoyer")
+        self.sendButton.setEnabled(True)
+        self.lineEdit.setEnabled(True)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
